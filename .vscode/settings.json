@@ -1,0 +1,7 @@
+{
+  "python.analysis.diagnosticSeverityOverrides": {
+    // Pylance treats jaxtyping shape annotations as invalid type forms even though they are valid at runtime.
+    "reportInvalidTypeForm": "none"
+  },
+  "python-envs.defaultEnvManager": "ms-python.python:venv"
+}
