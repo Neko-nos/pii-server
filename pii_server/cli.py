@@ -1,5 +1,6 @@
 import argparse
 import io
+import os
 import subprocess
 import sys
 import time
@@ -29,6 +30,10 @@ def initialize(device: int | str = -1) -> int:
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
     print("Starting and loading the PII detector...", file=sys.stderr)
+    environment = os.environ.copy()
+    if device == "mps":
+        # PyTorch reads MPS backend switches while the child process initializes.
+        environment["PYTORCH_MPS_PREFER_METAL"] = "1"
     with (directory / "service.log").open("a") as log:
         process = subprocess.Popen(
             [
@@ -43,6 +48,7 @@ def initialize(device: int | str = -1) -> int:
             stderr=subprocess.STDOUT,
             start_new_session=True,
             close_fds=True,
+            env=environment,
         )
 
     # The initial model download can take several minutes.
@@ -263,7 +269,7 @@ def main() -> int:
     detect_parser.add_argument(
         "--window-overlap",
         type=int,
-        default=256,
+        default=0,
         help="tokens shared by adjacent StarPII input windows",
     )
     detect_parser.add_argument(

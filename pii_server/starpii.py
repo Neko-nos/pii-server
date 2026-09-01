@@ -32,7 +32,7 @@ class StarPIIDetector:
         self,
         contents: list[str],
         window_size: int = 512,
-        window_overlap: int = 256,
+        window_overlap: int = 0,
         batch_size: int = 1,
     ) -> list[list[dict[str, object]]]:
         """Detect PII across a collection of source files.
