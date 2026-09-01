@@ -2,8 +2,9 @@
 
 # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/utils/pipeline.py
 
+import sys
 from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -32,12 +33,18 @@ class PiiNERPipeline:
         # (modified): Accept only an identifier because the service never injects model or tokenizer objects.
         model_name_or_path: str,
         device: int | torch.device = -1,
+        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L73
         window_size: int = 512,
+        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L78
         # (modified): The service exposes an exact token overlap instead of upstream's boolean toggle.
-        window_overlap: int = 256,
+        window_overlap: int = 0,
+        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L72
         batch_size: int | None = None,
-        num_workers: int = 1,
-        # (modified): Omit fp16/bf16 because the service exposes no mixed-precision option.
+        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L75
+        num_workers: int | None = None,
+        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L79
+        # (modified): The upstream dataset inference job enables BF16.
+        bf16: bool = True,
     ) -> None:
         """Initialize the inference pipeline.
 
@@ -47,7 +54,9 @@ class PiiNERPipeline:
             window_size (int): Tokens in each model window.
             window_overlap (int): Tokens shared by adjacent windows.
             batch_size (int | None): Model windows evaluated together.
-            num_workers (int): DataLoader worker count.
+            num_workers (int | None): DataLoader worker count. The platform default
+                is zero on macOS and one elsewhere.
+            bf16 (bool): Whether to use BF16 automatic mixed precision.
         """
         # (modified): Load fixed artifacts without arbitrary model or tokenizer kwargs.
         self.model = AutoModelForTokenClassification.from_pretrained(model_name_or_path)
@@ -61,9 +70,16 @@ class PiiNERPipeline:
             else torch.device("cpu" if device < 0 else f"cuda:{device}")
         )
         self.batch_size = batch_size
-        self.num_workers = num_workers
+        # macOS starts a fresh interpreter for each worker, which dominates the
+        # short-lived DataLoader iterations used by this request-oriented service.
+        self.num_workers = (
+            (0 if sys.platform == "darwin" else 1)
+            if num_workers is None
+            else num_workers
+        )
         self.window_size = window_size
         self.window_overlap = window_overlap
+        self.bf16 = bf16
         self.model = self.model.to(self.device)
         # (modified): The fixed StarPII model supplies the only label mapping used here.
         self.id_to_label = self.model.config.id2label
@@ -95,6 +111,13 @@ class PiiNERPipeline:
             torch.cuda.set_device(self.device)
         yield
 
+    def mixed_precision_context(self):
+        """Select the configured mixed-precision context."""
+        if self.bf16 and self.device.type != "cpu":
+            # (modified): Extend upstream accelerator BF16 from CUDA to MPS; CPU stays FP32.
+            return torch.autocast(self.device.type, dtype=torch.bfloat16)
+        return nullcontext()
+
     # (modified): Omit unused forward parameters because the StarPII model call is fixed.
     def forward(self, model_inputs: dict[str, object]) -> dict[str, object]:
         """Evaluate one group of model windows.
@@ -106,8 +129,11 @@ class PiiNERPipeline:
             dict[str, object]: Model outputs and metadata as CPU arrays.
         """
         # (modified): The required Torch version always provides inference_mode.
-        # (modified): Skip upstream autocast because the service has no fp16/bf16 option.
-        with self.device_placement(), torch.inference_mode():
+        with (
+            self.device_placement(),
+            torch.inference_mode(),
+            self.mixed_precision_context(),
+        ):
             # (modified): Move only model tensors; source metadata remains on the CPU.
             model_inputs["input_ids"] = model_inputs["input_ids"].to(self.device)
             model_inputs["attention_mask"] = model_inputs["attention_mask"].to(
@@ -176,10 +202,10 @@ class PiiNERPipeline:
         dataset: Dataset,
         tokenizer: PreTrainedTokenizerBase,
         batch_size: int | None,
-        num_workers: int = 1,
+        num_workers: int,
         window_size: int | None = None,
         # (modified): Propagate the service's exact token-overlap setting.
-        window_overlap: int = 256,
+        window_overlap: int = 0,
     ) -> DataLoader:
         """Build upstream's window iterator and model DataLoader.
 
@@ -379,7 +405,7 @@ class PipelineIterator(IterableDataset):
         text_column: str = "content",
         window_size: int = 512,
         # (modified): Pipeline windows use the service's exact token-overlap setting.
-        window_overlap: int = 256,
+        window_overlap: int = 0,
     ) -> None:
         """Initialize the iterable model-window dataset.
 
