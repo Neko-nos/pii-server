@@ -1,6 +1,7 @@
 import argparse
 import json
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from pii_server.pii.pii_detection import scan_pii_batch
@@ -42,15 +43,32 @@ class Detector:
         """
         contents = [file["text"] for file in files]
         suffixes = [Path(file["filename"]).suffix for file in files]
-        # Pass the full staged-file collection to the PII scanner once.
-        rule_based_results = scan_pii_batch(
-            {"content": contents, "suffix": suffixes},
-            self.starpii.gibberish,
-            key_detector=key_detector,
-        )
-        starpii_results = self.starpii.detect(
-            contents, window_size, window_overlap, batch_size
-        )
+
+        def scan_rule_based() -> list[list[dict[str, str | int]]]:
+            """Run rule-based detection.
+
+            Returns:
+                list[list[dict[str, str | int]]]: Findings grouped by input text.
+            """
+            # Pass the full staged-file collection to the PII scanner once.
+            return scan_pii_batch(
+                {"content": contents, "suffix": suffixes},
+                self.starpii.gibberish,
+                key_detector=key_detector,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            rule_based_future = executor.submit(scan_rule_based)
+            starpii_future = executor.submit(
+                self.starpii.detect,
+                contents,
+                window_size,
+                window_overlap,
+                batch_size,
+            )
+            rule_based_results = rule_based_future.result()
+            starpii_results = starpii_future.result()
+
         findings = []
         for file, file_rule_based_findings, file_starpii_findings in zip(
             files, rule_based_results, starpii_results
