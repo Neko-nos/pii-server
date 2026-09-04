@@ -1,13 +1,19 @@
 """Run the upstream StarPII pipeline for collections of source files."""
 
+import sys
 from pathlib import Path
 
-import torch
 from datasets import Dataset
 from gibberish_detector import detector
 
 from pii_server.pii.ner.pii_inference.utils.pipeline import PiiNERPipeline
 from pii_server.pii.ner.pii_redaction.utils import keep_entity
+
+if sys.platform == "darwin":
+    from pii_server.pii.ner.pii_inference.utils.mlx.backend import MlxPiiNERPipeline
+    from pii_server.pii.ner.pii_inference.utils.mlx.conversion import (
+        prepare_mlx_checkpoint,
+    )
 
 
 class StarPIIDetector:
@@ -17,12 +23,14 @@ class StarPIIDetector:
         """Load StarPII on the configured device.
 
         Args:
-            device (int | str): Torch device index or ``mps`` backend name.
+            device (int | str): Accelerator selection.
         """
-        # This service always uses StarPII rather than accepting an arbitrary model.
-        # str -> mps, -1 -> cpu, other -> gpu
-        pipeline_device = torch.device(device) if isinstance(device, str) else device
-        self.pipeline = PiiNERPipeline("bigcode/starpii", device=pipeline_device)
+
+        if device == "mps":
+            checkpoint_path = prepare_mlx_checkpoint("bigcode/starpii")
+            self.pipeline = MlxPiiNERPipeline(checkpoint_path)
+        else:
+            self.pipeline = PiiNERPipeline("bigcode/starpii", device=device)
         # Loading the packaged gibberish model once avoids repeated disk reads.
         self.gibberish = detector.create_from_model(
             Path(__file__).with_name("pii") / "gibberish_data" / "big.model"

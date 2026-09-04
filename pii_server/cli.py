@@ -1,6 +1,5 @@
 import argparse
 import io
-import os
 import subprocess
 import sys
 import time
@@ -13,7 +12,7 @@ def initialize(device: int | str = -1) -> int:
     """Start the persistent server and load StarPII.
 
     Args:
-        device (int | str): Torch device index or ``mps`` backend name.
+        device (int | str): Accelerator selection.
 
     Returns:
         int: Zero after the server accepts requests.
@@ -30,10 +29,6 @@ def initialize(device: int | str = -1) -> int:
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
     print("Starting and loading the PII detector...", file=sys.stderr)
-    environment = os.environ.copy()
-    if device == "mps":
-        # PyTorch reads MPS backend switches while the child process initializes.
-        environment["PYTORCH_MPS_PREFER_METAL"] = "1"
     with (directory / "service.log").open("a") as log:
         process = subprocess.Popen(
             [
@@ -48,7 +43,6 @@ def initialize(device: int | str = -1) -> int:
             stderr=subprocess.STDOUT,
             start_new_session=True,
             close_fds=True,
-            env=environment,
         )
 
     # The initial model download can take several minutes.
@@ -243,7 +237,7 @@ def main() -> int:
         "--device",
         type=parse_device,
         default=-1,
-        help="Torch device: -1 selects CPU, an integer selects CUDA, and mps selects Apple GPU",
+        help="device: -1 selects CPU, an integer selects CUDA, and mps selects Apple GPU",
     )
     detect_parser = subparsers.add_parser(
         "detect",
