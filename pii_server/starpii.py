@@ -14,6 +14,10 @@ if sys.platform == "darwin":
     from pii_server.pii.ner.pii_inference.utils.mlx.conversion import (
         prepare_mlx_checkpoint,
     )
+else:
+    from pii_server.pii.ner.pii_inference.utils.vllm.backend import (
+        VllmPiiNERPipeline,
+    )
 
 
 class StarPIIDetector:
@@ -29,6 +33,8 @@ class StarPIIDetector:
         if device == "mps":
             checkpoint_path = prepare_mlx_checkpoint("bigcode/starpii")
             self.pipeline = MlxPiiNERPipeline(checkpoint_path)
+        elif sys.platform != "darwin":
+            self.pipeline = VllmPiiNERPipeline("bigcode/starpii", device=device)
         else:
             self.pipeline = PiiNERPipeline("bigcode/starpii", device=device)
         # Loading the packaged gibberish model once avoids repeated disk reads.
