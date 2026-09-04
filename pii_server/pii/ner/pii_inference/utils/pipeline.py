@@ -3,6 +3,7 @@
 # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/utils/pipeline.py
 
 import sys
+from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
@@ -25,64 +26,8 @@ from .chunking import chunk_inputs
 from .postprocessing import postprocess
 
 
-class PiiNERPipeline:
-    """Run StarPII over a dataset using BigCode's inference pipeline."""
-
-    def __init__(
-        self,
-        # (modified): Accept only an identifier because the service never injects model or tokenizer objects.
-        model_name_or_path: str,
-        device: int | torch.device = -1,
-        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L73
-        window_size: int = 512,
-        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L78
-        # (modified): The service exposes an exact token overlap instead of upstream's boolean toggle.
-        window_overlap: int = 0,
-        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L72
-        batch_size: int | None = None,
-        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L75
-        num_workers: int | None = None,
-        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L79
-        # (modified): The upstream dataset inference job enables BF16.
-        bf16: bool = True,
-    ) -> None:
-        """Initialize the inference pipeline.
-
-        Args:
-            model_name_or_path (str): Model identifier.
-            device (int | torch.device): Torch device or index; negative selects CPU.
-            window_size (int): Tokens in each model window.
-            window_overlap (int): Tokens shared by adjacent windows.
-            batch_size (int | None): Model windows evaluated together.
-            num_workers (int | None): DataLoader worker count. The platform default
-                is zero on macOS and one elsewhere.
-            bf16 (bool): Whether to use BF16 automatic mixed precision.
-        """
-        # (modified): Load fixed artifacts without arbitrary model or tokenizer kwargs.
-        self.model = AutoModelForTokenClassification.from_pretrained(model_name_or_path)
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name_or_path, add_prefix_space=True
-        )
-        # (modified): Torch is required, so no optional-dependency check is needed.
-        self.device = (
-            device
-            if isinstance(device, torch.device)
-            else torch.device("cpu" if device < 0 else f"cuda:{device}")
-        )
-        self.batch_size = batch_size
-        # macOS starts a fresh interpreter for each worker, which dominates the
-        # short-lived DataLoader iterations used by this request-oriented service.
-        self.num_workers = (
-            (0 if sys.platform == "darwin" else 1)
-            if num_workers is None
-            else num_workers
-        )
-        self.window_size = window_size
-        self.window_overlap = window_overlap
-        self.bf16 = bf16
-        self.model = self.model.to(self.device)
-        # (modified): The fixed StarPII model supplies the only label mapping used here.
-        self.id_to_label = self.model.config.id2label
+class BasePiiNERPipeline(ABC):
+    """Share backend-independent StarPII inference processing."""
 
     # (modified): Omit unused call arguments because the service passes only a dataset.
     def __call__(self, inputs: Dataset) -> Iterator[dict[str, object]]:
@@ -99,28 +44,9 @@ class PiiNERPipeline:
         for entry, entities in zip(dataset_iterator, predict_iterator):
             yield dict(entities=entities, **entry)
 
-    @contextmanager
-    def device_placement(self):
-        """Select the configured CUDA device while evaluating the model.
-
-        Yields:
-            None: Control while the configured device is active.
-        """
-        # (modified): CUDA availability must not select CUDA when CPU or MPS was requested.
-        if self.device.type == "cuda":
-            torch.cuda.set_device(self.device)
-        yield
-
-    def mixed_precision_context(self):
-        """Select the configured mixed-precision context."""
-        if self.bf16 and self.device.type != "cpu":
-            # (modified): Extend upstream accelerator BF16 from CUDA to MPS; CPU stays FP32.
-            return torch.autocast(self.device.type, dtype=torch.bfloat16)
-        return nullcontext()
-
-    # (modified): Omit unused forward parameters because the StarPII model call is fixed.
+    @abstractmethod
     def forward(self, model_inputs: dict[str, object]) -> dict[str, object]:
-        """Evaluate one group of model windows.
+        """Evaluate one group of model windows with the selected backend.
 
         Args:
             model_inputs (dict[str, object]): Collated model inputs and metadata.
@@ -128,50 +54,6 @@ class PiiNERPipeline:
         Returns:
             dict[str, object]: Model outputs and metadata as CPU arrays.
         """
-        # (modified): The required Torch version always provides inference_mode.
-        with (
-            self.device_placement(),
-            torch.inference_mode(),
-            self.mixed_precision_context(),
-        ):
-            # (modified): Move only model tensors; source metadata remains on the CPU.
-            model_inputs["input_ids"] = model_inputs["input_ids"].to(self.device)
-            model_inputs["attention_mask"] = model_inputs["attention_mask"].to(
-                self.device
-            )
-            model_outputs = self._forward(model_inputs)
-            model_outputs = {
-                name: tensor.detach().to("cpu").numpy()
-                if isinstance(tensor, torch.Tensor)
-                else tensor
-                for name, tensor in model_outputs.items()
-            }
-        return model_outputs
-
-    # (modified): Do not forward arbitrary model arguments because the server supplies none.
-    def _forward(self, model_inputs: dict[str, object]) -> dict[str, object]:
-        """Run the token-classification model and drop special-token logits.
-
-        Args:
-            model_inputs (dict[str, object]): Collated model inputs and metadata.
-
-        Returns:
-            dict[str, object]: Tensor outputs with source metadata.
-        """
-        input_ids = model_inputs.pop("input_ids")
-        attention_mask = model_inputs.pop("attention_mask")
-        logits = self.model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            return_dict=True,
-        )["logits"]
-        # (modified): Slice and return only logits because later stages never consume token IDs.
-        logits = torch.softmax(logits, dim=-1)
-        logits = logits[:, 1:-1]
-        return {
-            "logits": logits,
-            **model_inputs,
-        }
 
     # (modified): Keep only overlap averaging, the sole aggregation used by inference.
     @staticmethod
@@ -366,6 +248,140 @@ class PiiNERPipeline:
             for tag, start_idx, end_idx in pred_entities
         ]
         return entities
+
+
+class PiiNERPipeline(BasePiiNERPipeline):
+    """Run StarPII with the Transformers backend."""
+
+    def __init__(
+        self,
+        # (modified): Accept only an identifier because the service never injects model or tokenizer objects.
+        model_name_or_path: str,
+        device: int | torch.device = -1,
+        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L73
+        window_size: int = 512,
+        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L78
+        # (modified): The service exposes an exact token overlap instead of upstream's boolean toggle.
+        window_overlap: int = 0,
+        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L72
+        batch_size: int | None = None,
+        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L75
+        num_workers: int | None = None,
+        # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_inference/ner_inference.py#L79
+        # (modified): The upstream dataset inference job enables BF16.
+        bf16: bool = True,
+    ) -> None:
+        """Initialize the Transformers inference pipeline.
+
+        Args:
+            model_name_or_path (str): Model identifier.
+            device (int | torch.device): Torch device or index; negative selects CPU.
+            window_size (int): Tokens in each model window.
+            window_overlap (int): Tokens shared by adjacent windows.
+            batch_size (int | None): Model windows evaluated together.
+            num_workers (int | None): DataLoader worker count. The platform default
+                is zero on macOS and one elsewhere.
+            bf16 (bool): Whether to use BF16 automatic mixed precision.
+        """
+        # (modified): Load fixed artifacts without arbitrary model or tokenizer kwargs.
+        self.model = AutoModelForTokenClassification.from_pretrained(model_name_or_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name_or_path, add_prefix_space=True
+        )
+        # (modified): Torch is required, so no optional-dependency check is needed.
+        self.device = (
+            device
+            if isinstance(device, torch.device)
+            else torch.device("cpu" if device < 0 else f"cuda:{device}")
+        )
+        self.batch_size = batch_size
+        # macOS starts a fresh interpreter for each worker, which dominates the
+        # short-lived DataLoader iterations used by this request-oriented service.
+        self.num_workers = (
+            (0 if sys.platform == "darwin" else 1)
+            if num_workers is None
+            else num_workers
+        )
+        self.window_size = window_size
+        self.window_overlap = window_overlap
+        self.bf16 = bf16
+        self.model = self.model.to(self.device)
+        # (modified): The fixed StarPII model supplies the only label mapping used here.
+        self.id_to_label = self.model.config.id2label
+
+    @contextmanager
+    def device_placement(self):
+        """Select the configured CUDA device while evaluating the model.
+
+        Yields:
+            None: Control while the configured device is active.
+        """
+        # (modified): CUDA availability must not select CUDA when CPU or MPS was requested.
+        if self.device.type == "cuda":
+            torch.cuda.set_device(self.device)
+        yield
+
+    def mixed_precision_context(self):
+        """Select the configured mixed-precision context."""
+        if self.bf16 and self.device.type != "cpu":
+            # (modified): Extend upstream accelerator BF16 from CUDA to MPS; CPU stays FP32.
+            return torch.autocast(self.device.type, dtype=torch.bfloat16)
+        return nullcontext()
+
+    # (modified): Omit unused forward parameters because the StarPII model call is fixed.
+    def forward(self, model_inputs: dict[str, object]) -> dict[str, object]:
+        """Evaluate one group of model windows with Transformers.
+
+        Args:
+            model_inputs (dict[str, object]): Collated model inputs and metadata.
+
+        Returns:
+            dict[str, object]: Model outputs and metadata as CPU arrays.
+        """
+        # (modified): The required Torch version always provides inference_mode.
+        with (
+            self.device_placement(),
+            torch.inference_mode(),
+            self.mixed_precision_context(),
+        ):
+            # (modified): Move only model tensors; source metadata remains on the CPU.
+            model_inputs["input_ids"] = model_inputs["input_ids"].to(self.device)
+            model_inputs["attention_mask"] = model_inputs["attention_mask"].to(
+                self.device
+            )
+            model_outputs = self._forward(model_inputs)
+            model_outputs = {
+                name: tensor.detach().to("cpu").numpy()
+                if isinstance(tensor, torch.Tensor)
+                else tensor
+                for name, tensor in model_outputs.items()
+            }
+        return model_outputs
+
+    # (modified): Do not forward arbitrary model arguments because the server supplies none.
+    def _forward(self, model_inputs: dict[str, object]) -> dict[str, object]:
+        """Run the token-classification model and drop special-token logits.
+
+        Args:
+            model_inputs (dict[str, object]): Collated model inputs and metadata.
+
+        Returns:
+            dict[str, object]: Tensor outputs with source metadata.
+        """
+        input_ids = model_inputs.pop("input_ids")
+        attention_mask = model_inputs.pop("attention_mask")
+        logits = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            return_dict=True,
+        )["logits"]
+        # (modified): Slice and return only logits because later stages never consume token IDs.
+        logits = torch.softmax(logits, dim=-1)
+        logits = logits[:, 1:-1]
+        return {
+            "logits": logits,
+            **model_inputs,
+        }
 
 
 @dataclass
