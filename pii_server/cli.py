@@ -237,7 +237,10 @@ def main() -> int:
         "--device",
         type=parse_device,
         default=-1,
-        help="device: -1 selects CPU, an integer selects CUDA, and mps selects Apple GPU",
+        help=(
+            "device: -1 uses CPU on macOS and vLLM platform detection otherwise; "
+            "an integer selects CUDA, and mps selects Apple GPU"
+        ),
     )
     detect_parser = subparsers.add_parser(
         "detect",
