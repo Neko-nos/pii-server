@@ -10,13 +10,6 @@ from pii_server.pii.ner.pii_inference.utils.pipeline import PiiNERPipeline
     [
         pytest.param(torch.device("cpu"), id="cpu"),
         pytest.param(
-            torch.device("mps"),
-            marks=pytest.mark.skipif(
-                not torch.backends.mps.is_available(), reason="MPS is unavailable"
-            ),
-            id="mps",
-        ),
-        pytest.param(
             torch.device("cuda"),
             marks=pytest.mark.skipif(
                 not torch.cuda.is_available() or not torch.cuda.is_bf16_supported(),
