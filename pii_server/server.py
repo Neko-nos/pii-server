@@ -17,7 +17,7 @@ class Detector:
         """Initialize both detection pipelines.
 
         Args:
-            device (int | str): Torch device index or ``mps`` backend name.
+            device (int | str): Accelerator selection.
         """
         self.starpii = StarPIIDetector(device)
 
@@ -120,7 +120,7 @@ def serve(device: int | str = -1) -> None:
     """Load StarPII and serve detection requests until unloaded.
 
     Args:
-        device (int | str): Torch device index or ``mps`` backend name.
+        device (int | str): Accelerator selection.
     """
     directory = runtime_dir()
     # The socket and log directory concern text that may contain private data.

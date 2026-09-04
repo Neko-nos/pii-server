@@ -30,11 +30,16 @@ its zero-based device number when initializing the server:
 pii_server init --device 0
 ```
 
-On a supported Mac, select the Apple GPU through PyTorch's MPS backend:
+On a supported Apple silicon Mac, select the Apple GPU:
 
 ```console
 pii_server init --device mps
 ```
+
+The first MLX initialization converts the original StarPII checkpoint into a
+safetensors file under `~/.cache/mlx`. Later initializations load that
+converted checkpoint, its configuration, and its tokenizer entirely from the
+local cache. `XDG_CACHE_HOME` replaces `~/.cache` when configured.
 
 Stop it and release its resources with:
 
