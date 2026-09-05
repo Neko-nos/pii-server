@@ -9,11 +9,14 @@ confirmed false positives allow it to continue.
 
 ## Installation
 
-Install the command from this repository with
-[uv](https://docs.astral.sh/uv/concepts/tools/):
+install the command via [uv](https://docs.astral.sh/uv/concepts/tools/):
 
 ```console
-uv tool install -e .
+# macOS
+uv tool install -e ".[mlx]"
+
+# Other OS
+uv tool install -e ".[vllm]"
 ```
 
 Start the persistent detector before running the hook:
@@ -23,8 +26,9 @@ pii_server init
 ```
 
 The first initialization downloads and loads StarPII, so it can take several
-minutes. It uses the CPU by default. To load the model on a CUDA device, pass
-its zero-based device number when initializing the server:
+minutes. Without `--device`, macOS uses the CPU and vLLM on other operating
+systems automatically detects its device platform. To select a specific CUDA
+device, pass its zero-based device number when initializing the server:
 
 ```console
 pii_server init --device 0

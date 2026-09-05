@@ -10,7 +10,7 @@ from pii_server.pii.ner.pii_inference.utils.pipeline import PiiNERPipeline
     [
         pytest.param(torch.device("cpu"), id="cpu"),
         pytest.param(
-            torch.device("cuda"),
+            torch.device("cuda:0"),
             marks=pytest.mark.skipif(
                 not torch.cuda.is_available() or not torch.cuda.is_bf16_supported(),
                 reason="a BF16-capable CUDA device is unavailable",
@@ -19,7 +19,9 @@ from pii_server.pii.ner.pii_inference.utils.pipeline import PiiNERPipeline
         ),
     ],
 )
-def test_model_inference_detects_dummy_email(device: torch.device) -> None:
+def test_transformers_model_inference_detects_dummy_email(
+    device: torch.device,
+) -> None:
     dummy_email = "placeholder@example.com"
     content = f'const supportEmail = "{dummy_email}";'
     dataset = Dataset.from_dict({"content": [content], "id": ["dummy"]})
