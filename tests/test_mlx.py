@@ -1,21 +1,36 @@
 import sys
 
 import pytest
+from datasets import Dataset
 
-from pii_server.starpii import StarPIIDetector
+if sys.platform == "darwin":
+    from pii_server.pii.ner.pii_inference.utils.mlx.backend import MlxPiiNERPipeline
+    from pii_server.pii.ner.pii_inference.utils.mlx.conversion import (
+        prepare_mlx_checkpoint,
+    )
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="MLX requires macOS")
 def test_mlx_model_inference_detects_dummy_email() -> None:
     dummy_email = "placeholder@example.com"
     content = f'const supportEmail = "{dummy_email}";'
-    detector = StarPIIDetector(device="mps")
-
-    ((entity,),) = detector.detect([content], batch_size=1)
-    padded_results = detector.detect(
-        [content, f"// Longer dummy input.\n{content}"], batch_size=2
+    dataset = Dataset.from_dict(
+        {
+            "content": [content, f"// Longer dummy input.\n{content}"],
+            "id": ["short", "long"],
+        }
     )
+    checkpoint_path = prepare_mlx_checkpoint("bigcode/starpii")
+    pipeline = MlxPiiNERPipeline(checkpoint_path)
+    pipeline.batch_size = 2
+    pipeline.window_size = 512
+    pipeline.window_overlap = 0
 
+    first_result, second_result = pipeline(dataset)
+    (entity,) = first_result["entities"]
+
+    assert first_result["content"] == content
+    assert first_result["id"] == "short"
     assert {
         "tag": entity["tag"],
         "start": entity["start"],
@@ -28,4 +43,4 @@ def test_mlx_model_inference_detects_dummy_email() -> None:
         "value": dummy_email,
     }
     assert entity["score"] > 0.99
-    assert padded_results[0][0]["value"] == dummy_email
+    assert second_result["entities"][0]["value"] == dummy_email
