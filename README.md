@@ -12,7 +12,7 @@ confirmed false positives allow it to continue.
 install the command via [uv](https://docs.astral.sh/uv/concepts/tools/):
 
 ```console
-# macOS
+# macOS (Apple silicon)
 uv tool install -e ".[mlx]"
 
 # Other OS
@@ -26,18 +26,13 @@ pii_server init
 ```
 
 The first initialization downloads and loads StarPII, so it can take several
-minutes. Without `--device`, macOS uses the CPU and vLLM on other operating
-systems automatically detects its device platform. To select a specific CUDA
-device, pass its zero-based device number when initializing the server:
+minutes. On macOS, inference always uses the Apple GPU through MLX and requires
+Apple silicon. On other operating systems, vLLM automatically detects its device
+platform. To select a specific CUDA device, pass its zero-based device number
+when initializing the server:
 
 ```console
 pii_server init --device 0
-```
-
-On a supported Apple silicon Mac, select the Apple GPU:
-
-```console
-pii_server init --device mps
 ```
 
 The first MLX initialization converts the original StarPII checkpoint into a
