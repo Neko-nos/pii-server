@@ -238,8 +238,8 @@ def main() -> int:
         type=parse_device,
         default=-1,
         help=(
-            "device: -1 uses CPU on macOS and vLLM platform detection otherwise; "
-            "an integer selects CUDA, and mps selects Apple GPU"
+            "macOS always uses the Apple GPU through MLX; elsewhere, "
+            "-1 uses vLLM platform detection and a nonnegative integer selects CUDA"
         ),
     )
     detect_parser = subparsers.add_parser(

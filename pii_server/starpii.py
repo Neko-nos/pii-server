@@ -6,7 +6,6 @@ from pathlib import Path
 from datasets import Dataset
 from gibberish_detector import detector
 
-from pii_server.pii.ner.pii_inference.utils.pipeline import PiiNERPipeline
 from pii_server.pii.ner.pii_redaction.utils import keep_entity
 
 if sys.platform == "darwin":
@@ -27,16 +26,15 @@ class StarPIIDetector:
         """Load StarPII on the configured device.
 
         Args:
-            device (int | str): Accelerator selection.
+            device (int | str): CUDA device number or automatic selection with -1.
+                macOS always uses the Apple GPU through MLX.
         """
 
-        if device == "mps":
+        if sys.platform == "darwin":
             checkpoint_path = prepare_mlx_checkpoint("bigcode/starpii")
             self.pipeline = MlxPiiNERPipeline(checkpoint_path)
-        elif sys.platform != "darwin":
-            self.pipeline = VllmPiiNERPipeline("bigcode/starpii", device=device)
         else:
-            self.pipeline = PiiNERPipeline("bigcode/starpii", device=device)
+            self.pipeline = VllmPiiNERPipeline("bigcode/starpii", device=device)
         # Loading the packaged gibberish model once avoids repeated disk reads.
         self.gibberish = detector.create_from_model(
             Path(__file__).with_name("pii") / "gibberish_data" / "big.model"

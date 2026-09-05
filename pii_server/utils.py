@@ -9,7 +9,7 @@ def parse_device(value: str) -> int | str:
     """Parse a device argument accepted by the server.
 
     Args:
-        value (str): CPU sentinel, CUDA device number, or MPS backend name.
+        value (str): Automatic selection (-1), CUDA device number, or ``mps``.
 
     Returns:
         int | str: Integer device number or ``mps`` backend name.
