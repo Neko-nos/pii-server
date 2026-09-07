@@ -67,7 +67,10 @@ class BasePiiNERPipeline(ABC):
             Float[np.ndarray, "total_tokens labels"]: Predictions aligned to the
                 complete source token sequence.
         """
-        total_length = np.max(offsets) + len(chunks[np.argmax(offsets)])
+        # (modified): Batch padding can make an earlier window extend beyond the final window.
+        total_length = max(
+            offset + len(chunk) for chunk, offset in zip(chunks, offsets)
+        )
         total_shape = (total_length, np.shape(chunks[0])[-1])
         combined_chunks = np.zeros(total_shape, dtype=np.array(chunks[0]).dtype)
         for chunk, offset in zip(chunks, offsets):
