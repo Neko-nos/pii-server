@@ -1,4 +1,4 @@
-"""Apply upstream redaction exclusions to detected PII."""
+"""Apply upstream redaction exclusions and mask detected PII."""
 
 import ipaddress
 
@@ -20,8 +20,7 @@ POPULAR_DNS_SERVERS = [
     "94.140.15.15",
 ]
 
-# (modified): Omit load_json, random_replacements, replace_ip, redact_pii_text,
-# and redact_pii_batch because this scan-only service never rewrites content.
+# (modified): Omit random replacements and dataset helpers because masking uses type tokens.
 
 
 # (modified): Share the same IP exclusions between regex and StarPII findings.
@@ -60,3 +59,39 @@ def remove_redaction_exclusions(
         if secret["tag"] != "IP_ADDRESS"
         or not is_invalid_private_or_popular_dns_ip(secret["value"])
     ]
+
+
+# ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/ner/pii_redaction/utils.py#L102
+# (modified): Consume the shared scan response, whose spans already passed redaction filters.
+def redact_pii_text(text: str, findings: list[dict[str, object]]) -> str:
+    """Mask detected spans using BigCode's replacement order and value cache.
+
+    Args:
+        text (str): Original text to mask.
+        findings (list[dict[str, object]]): Filtered spans with start, end, and type.
+
+    Returns:
+        str: Text with detected spans replaced by ``<TYPE_MASK>`` tokens.
+    """
+    replaced_secrets = {}
+    subparts = []
+    step = 0
+    for finding in sorted(findings, key=lambda item: int(item["start"])):
+        start = int(finding["start"])
+        end = int(finding["end"])
+        # (modified): Skip contained findings that would move back into already masked text.
+        if end < step:
+            continue
+        subtext = text[step:start]
+        subparts.append(subtext if subtext else " ")
+        value = text[start:end]
+        if value in replaced_secrets:
+            replacement = replaced_secrets[value]
+        else:
+            # (modified): Use the requested type tokens for all PII, including IPs.
+            replacement = f"<{finding['type']}_MASK>"
+            replaced_secrets[value] = replacement
+        subparts.append(replacement)
+        step = end
+    subparts.append(text[step:])
+    return "".join(subparts)

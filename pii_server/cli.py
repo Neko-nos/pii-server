@@ -5,6 +5,9 @@ import sys
 import time
 from pathlib import Path
 
+import pyperclip
+
+from pii_server.pii.pii_redaction import redact_pii_text
 from pii_server.utils import parse_device, request, runtime_dir, server_running
 
 
@@ -128,6 +131,38 @@ def terminal_answer(
     return terminal_input.readline().strip().lower()
 
 
+def scan(
+    files: list[dict[str, str]],
+    key_detector: str,
+    window_size: int,
+    window_overlap: int,
+    batch_size: int,
+) -> list[dict[str, object]]:
+    """Scan text with the initialized server for detection or masking.
+
+    Args:
+        files (list[dict[str, str]]): Filenames and text to scan.
+        key_detector (str): ``detect-secrets`` or ``regex`` credential detector.
+        window_size (int): Tokens in each StarPII input window.
+        window_overlap (int): Tokens shared by adjacent StarPII input windows.
+        batch_size (int): StarPII windows evaluated together.
+
+    Returns:
+        list[dict[str, object]]: Filtered PII spans returned by both detectors.
+    """
+    return request(
+        {
+            "operation": "scan",
+            "files": files,
+            "key_detector": key_detector,
+            "window_size": window_size,
+            "window_overlap": window_overlap,
+            "batch_size": batch_size,
+        },
+        600,
+    )["findings"]
+
+
 def detect(
     filenames: list[str],
     key_detector: str,
@@ -157,17 +192,7 @@ def detect(
         return 0
 
     # Send all added contents together so the pipeline processes one collection.
-    findings = request(
-        {
-            "operation": "scan",
-            "files": files,
-            "key_detector": key_detector,
-            "window_size": window_size,
-            "window_overlap": window_overlap,
-            "batch_size": batch_size,
-        },
-        600,
-    )["findings"]
+    findings = scan(files, key_detector, window_size, window_overlap, batch_size)
     if not findings:
         return 0
 
@@ -197,6 +222,48 @@ def detect(
         return 0
 
 
+def mask(
+    filename: Path,
+    in_place: bool,
+    key_detector: str,
+    window_size: int,
+    window_overlap: int,
+    batch_size: int,
+) -> int:
+    """Replace detected PII in a text file with type-specific mask tokens.
+
+    Args:
+        filename (Path): UTF-8 text file to mask in full.
+        in_place (bool): Overwrite the input file when true; otherwise write to
+            stdout and copy to the clipboard.
+        key_detector (str): ``detect-secrets`` or ``regex`` credential detector.
+        window_size (int): Tokens in each StarPII input window.
+        window_overlap (int): Tokens shared by adjacent StarPII input windows.
+        batch_size (int): StarPII windows evaluated together.
+
+    Returns:
+        int: Zero after writing the masked text.
+    """
+    # Avoid newline conversion because it changes otherwise untouched text.
+    with filename.open(encoding="utf-8", newline="") as source:
+        text = source.read()
+    findings = scan(
+        [{"filename": str(filename), "text": text}],
+        key_detector,
+        window_size,
+        window_overlap,
+        batch_size,
+    )
+    masked_text = redact_pii_text(text, findings)
+    if in_place:
+        with filename.open("w", encoding="utf-8", newline="") as destination:
+            destination.write(masked_text)
+    else:
+        sys.stdout.write(masked_text)
+        pyperclip.copy(masked_text)
+    return 0
+
+
 def unload() -> int:
     """Stop the persistent PII server.
 
@@ -219,7 +286,7 @@ def main() -> int:
         int: Process exit status.
     """
     parser = argparse.ArgumentParser(
-        description="Scan staged Git content for PII and credentials."
+        description="Detect PII in staged Git content or mask PII in text files."
     )
     subparsers = parser.add_subparsers(
         dest="command",
@@ -234,6 +301,7 @@ def main() -> int:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     init_parser.add_argument(
+        "-d",
         "--device",
         type=parse_device,
         default=-1,
@@ -242,13 +310,9 @@ def main() -> int:
             "-1 uses vLLM platform detection and a nonnegative integer selects CUDA"
         ),
     )
-    detect_parser = subparsers.add_parser(
-        "detect",
-        help="scan staged file contents",
-        description="Scan the staged contents of files passed by pre-commit.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    detect_parser.add_argument(
+    scan_parser = argparse.ArgumentParser(add_help=False)
+    scan_parser.add_argument(
+        "-k",
         "--key-detector",
         choices=("detect-secrets", "regex"),
         default="detect-secrets",
@@ -257,28 +321,64 @@ def main() -> int:
             "filters; regex uses BigCode's broad key pattern and gibberish filter"
         ),
     )
-    detect_parser.add_argument(
+    scan_parser.add_argument(
+        "-w",
         "--window-size",
         type=int,
         default=512,
         help="tokens in each StarPII input window",
     )
-    detect_parser.add_argument(
+    scan_parser.add_argument(
+        "-o",
         "--window-overlap",
         type=int,
         default=0,
         help="tokens shared by adjacent StarPII input windows",
     )
-    detect_parser.add_argument(
+    scan_parser.add_argument(
+        "-b",
         "--batch-size",
         type=int,
         default=1,
         help="StarPII windows evaluated together",
     )
+    detect_parser = subparsers.add_parser(
+        "detect",
+        parents=[scan_parser],
+        help="scan staged file contents",
+        description="Scan the staged contents of files passed by pre-commit.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     detect_parser.add_argument(
         "filenames",
         nargs="+",
         help="repository-relative staged files to scan",
+    )
+
+    mask_parser = subparsers.add_parser(
+        "mask",
+        parents=[scan_parser],
+        help="mask PII in a text file",
+        description=(
+            "Replace detected PII with <TYPE_MASK> tokens in a UTF-8 text file. "
+            "By default, print the result and copy it to the clipboard."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    mask_parser.add_argument(
+        "-f",
+        "--file",
+        dest="filename",
+        type=Path,
+        required=True,
+        default=argparse.SUPPRESS,
+        help="text file to mask in full",
+    )
+    mask_parser.add_argument(
+        "-i",
+        "--in-place",
+        action="store_true",
+        help="overwrite the input file with masked text",
     )
 
     subparsers.add_parser(
@@ -293,6 +393,15 @@ def main() -> int:
     if args.command == "detect":
         return detect(
             args.filenames,
+            args.key_detector,
+            args.window_size,
+            args.window_overlap,
+            args.batch_size,
+        )
+    if args.command == "mask":
+        return mask(
+            args.filename,
+            args.in_place,
             args.key_detector,
             args.window_size,
             args.window_overlap,
