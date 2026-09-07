@@ -44,7 +44,7 @@ def is_full_name(matched_str: str) -> bool:
     return len(matched_str.split()) > 1
 
 
-# (modified): Apply upstream's filters to findings because this service does not redact text.
+# (modified): Filter during detection so detect and mask use identical spans.
 def keep_entity(entity: dict[str, object], gibberish) -> bool:
     """Return whether a StarPII entity survives upstream redaction filters.
 
@@ -68,4 +68,4 @@ def keep_entity(entity: dict[str, object], gibberish) -> bool:
     return True
 
 
-# (modified): Omit replacement and redaction functions because this service only reports findings.
+# (modified): Omit upstream redaction functions here because the shared redactor handles findings from both detectors.

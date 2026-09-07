@@ -175,5 +175,5 @@ def serve(device: int | str = -1) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--device", type=parse_device, default=-1)
+    parser.add_argument("-d", "--device", type=parse_device, default=-1)
     serve(parser.parse_args().device)
