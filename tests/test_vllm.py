@@ -1,16 +1,34 @@
-import sys
-
 import pytest
+import torch
 from datasets import Dataset
+from vllm.platforms import current_platform
 
-if sys.platform != "darwin":
-    from pii_server.pii.ner.pii_inference.utils.vllm.backend import (
-        VllmPiiNERPipeline,
+from pii_server.pii.ner.pii_inference.utils.vllm.backend import (
+    VllmPiiNERPipeline,
+)
+
+
+@pytest.fixture(scope="module")
+def vllm_pipeline() -> VllmPiiNERPipeline:
+    """Load the model once for the vLLM integration tests.
+
+    Returns:
+        VllmPiiNERPipeline: Initialized pipeline on the detected platform.
+    """
+    return VllmPiiNERPipeline("bigcode/starpii")
+
+
+def test_vllm_pipeline_selects_default_dtype(
+    vllm_pipeline: VllmPiiNERPipeline,
+) -> None:
+    assert vllm_pipeline.model.llm_engine.model_config.dtype == (
+        torch.float32 if current_platform.is_cpu() else torch.bfloat16
     )
 
 
-@pytest.mark.skipif(sys.platform == "darwin", reason="vLLM is not used on macOS")
-def test_vllm_model_inference_detects_dummy_email() -> None:
+def test_vllm_model_inference_detects_dummy_email(
+    vllm_pipeline: VllmPiiNERPipeline,
+) -> None:
     dummy_email = "placeholder@example.com"
     content = f'const supportEmail = "{dummy_email}";'
     dataset = Dataset.from_dict(
@@ -19,7 +37,7 @@ def test_vllm_model_inference_detects_dummy_email() -> None:
             "id": ["short", "long"],
         }
     )
-    pipeline = VllmPiiNERPipeline("bigcode/starpii")
+    pipeline = vllm_pipeline
     pipeline.batch_size = 2
     pipeline.window_size = 512
     pipeline.window_overlap = 0

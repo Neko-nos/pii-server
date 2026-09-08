@@ -3,6 +3,7 @@ from gibberish_detector.detector import Detector as GibberishDetector
 # (modified): Use package imports because the service imports the upstream tree as a package.
 from pii_server.pii.utils.emails_ip_addresses_detection import detect_email_addresses
 from pii_server.pii.utils.keys_detection import detect_keys
+from pii_server.pii.utils.usernames_detection import detect_home_name
 
 # ref: https://github.com/bigcode-project/bigcode-dataset/blob/bebec929edd826f19b5fa3538f22d18d5b50da4b/pii/pii_detection.py#L7
 # (modified): Omit postprocess_secrets because the server consumes findings directly.
@@ -52,6 +53,8 @@ def scan_pii_batch(
             )
             # for keys use detect-secrets tool
             secrets.extend(detect_keys(text, suffix, gibberish))
+        # (modified): Retain known local account names that StarPII's filters discard.
+        secrets.extend(detect_home_name(text))
         findings.append(secrets)
     # (modified): Return findings directly instead of upstream's dataset columns.
     return findings

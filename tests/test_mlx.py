@@ -1,17 +1,22 @@
-import sys
-
+import mlx.core as mx
 import pytest
 from datasets import Dataset
 
-if sys.platform == "darwin":
-    from pii_server.pii.ner.pii_inference.utils.mlx.backend import MlxPiiNERPipeline
-    from pii_server.pii.ner.pii_inference.utils.mlx.conversion import (
-        prepare_mlx_checkpoint,
-    )
+from pii_server.pii.ner.pii_inference.utils.mlx.backend import MlxPiiNERPipeline
+from pii_server.pii.ner.pii_inference.utils.mlx.conversion import (
+    prepare_mlx_checkpoint,
+)
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="MLX requires macOS")
-def test_mlx_model_inference_detects_dummy_email() -> None:
+@pytest.fixture(scope="module", autouse=True)
+def mlx_gpu() -> None:
+    """Require and select the Apple GPU for MLX integration tests."""
+    assert mx.metal.is_available(), "MLX inference requires the macOS GPU."
+    mx.set_default_device(mx.gpu)
+
+
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
+def test_mlx_model_inference_detects_dummy_email(dtype: str) -> None:
     dummy_email = "placeholder@example.com"
     content = f'const supportEmail = "{dummy_email}";'
     dataset = Dataset.from_dict(
@@ -20,7 +25,7 @@ def test_mlx_model_inference_detects_dummy_email() -> None:
             "id": ["short", "long"],
         }
     )
-    checkpoint_path = prepare_mlx_checkpoint("bigcode/starpii")
+    checkpoint_path = prepare_mlx_checkpoint("bigcode/starpii", dtype=dtype)
     pipeline = MlxPiiNERPipeline(checkpoint_path)
     pipeline.batch_size = 2
     pipeline.window_size = 512
@@ -46,7 +51,6 @@ def test_mlx_model_inference_detects_dummy_email() -> None:
     assert second_result["entities"][0]["value"] == dummy_email
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="MLX requires macOS")
 def test_mlx_inference_detects_emails_across_overlapping_batches() -> None:
     dummy_email = "placeholder@example.com"
     line = f"Email: {dummy_email}\r\n"

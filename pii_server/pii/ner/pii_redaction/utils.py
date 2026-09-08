@@ -57,6 +57,9 @@ def keep_entity(entity: dict[str, object], gibberish) -> bool:
     """
     tag = str(entity["tag"])
     value = str(entity["value"])
+    # (modified): StarPII confuses usernames with decorators and path values;
+    # BigCode dropped them because of frequent false positives and negatives.
+    # ref: https://arxiv.org/html/2305.06161v2#S4.SS3
     if tag in {"AMBIGUOUS", "USERNAME"} or not is_secret(value):
         return False
     if tag == "IP_ADDRESS":

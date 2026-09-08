@@ -196,12 +196,13 @@ class MlxPiiNERPipeline(BasePiiNERPipeline):
         """Initialize the MLX inference pipeline.
 
         Args:
-            checkpoint_path (Path): Converted MLX safetensors checkpoint.
+            checkpoint_path (Path): MLX safetensors checkpoint in the selected dtype.
         """
         model_path = checkpoint_path.parent
         config = BertConfig.from_pretrained(model_path, local_files_only=True)
         model = BertForTokenClassification(config)
         model.load_weights(str(checkpoint_path))
+        self.dtype = str(model.classifier.weight.dtype).removeprefix("mlx.core.")
         # Materialize lazy weights during initialization instead of the first request.
         mx.eval(model.parameters())
         self.model = model
@@ -229,4 +230,5 @@ class MlxPiiNERPipeline(BasePiiNERPipeline):
         logits = mx.softmax(logits, axis=-1)
         # Each model window has one special token at each boundary.
         logits = logits[:, 1:-1]
-        return {"logits": np.asarray(logits), **model_inputs}
+        # NumPy cannot consume bfloat16 buffers directly.
+        return {"logits": np.asarray(logits.astype(mx.float32)), **model_inputs}

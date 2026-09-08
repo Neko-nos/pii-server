@@ -22,19 +22,22 @@ else:
 class StarPIIDetector:
     """Run StarPII inference and upstream redaction-time filters."""
 
-    def __init__(self, device: int | str = -1) -> None:
+    def __init__(self, device: int | str = -1, dtype: str = "auto") -> None:
         """Load StarPII on the configured device.
 
         Args:
             device (int | str): CUDA device number or automatic selection with -1.
                 macOS always uses the Apple GPU through MLX.
+            dtype (str): Model precision; auto selects BF16 on GPU and FP32 on CPU.
         """
 
         if sys.platform == "darwin":
-            checkpoint_path = prepare_mlx_checkpoint("bigcode/starpii")
+            checkpoint_path = prepare_mlx_checkpoint("bigcode/starpii", dtype=dtype)
             self.pipeline = MlxPiiNERPipeline(checkpoint_path)
         else:
-            self.pipeline = VllmPiiNERPipeline("bigcode/starpii", device=device)
+            self.pipeline = VllmPiiNERPipeline(
+                "bigcode/starpii", device=device, dtype=dtype
+            )
         # Loading the packaged gibberish model once avoids repeated disk reads.
         self.gibberish = detector.create_from_model(
             Path(__file__).with_name("pii") / "gibberish_data" / "big.model"

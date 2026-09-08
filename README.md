@@ -21,6 +21,14 @@ several minutes:
 pii_server init
 ```
 
+Supported precisions are BF16 (`bfloat16`) and FP32 (`float32`). Precision defaults
+to BF16 on GPU and FP32 on CPU. To choose precision explicitly, use `--dtype` when
+initializing the server:
+
+```console
+pii_server init --dtype bfloat16
+```
+
 To select a specific CUDA device, pass its zero-based device number
 when initializing the server:
 

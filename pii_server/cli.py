@@ -11,11 +11,12 @@ from pii_server.pii.pii_redaction import redact_pii_text
 from pii_server.utils import parse_device, request, runtime_dir, server_running
 
 
-def initialize(device: int | str = -1) -> int:
+def initialize(device: int | str = -1, dtype: str = "auto") -> int:
     """Start the persistent server and load StarPII.
 
     Args:
         device (int | str): Accelerator selection.
+        dtype (str): Model precision; auto selects BF16 on GPU and FP32 on CPU.
 
     Returns:
         int: Zero after the server accepts requests.
@@ -40,6 +41,8 @@ def initialize(device: int | str = -1) -> int:
                 "pii_server.server",
                 "--device",
                 str(device),
+                "--dtype",
+                dtype,
             ],
             stdin=subprocess.DEVNULL,
             stdout=log,
@@ -301,6 +304,12 @@ def main() -> int:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     init_parser.add_argument(
+        "--dtype",
+        choices=("auto", "bfloat16", "float32"),
+        default="auto",
+        help="model precision; auto selects BF16 on GPU and FP32 on CPU",
+    )
+    init_parser.add_argument(
         "-d",
         "--device",
         type=parse_device,
@@ -389,7 +398,7 @@ def main() -> int:
 
     args = parser.parse_args()
     if args.command == "init":
-        return initialize(args.device)
+        return initialize(args.device, args.dtype)
     if args.command == "detect":
         return detect(
             args.filenames,
