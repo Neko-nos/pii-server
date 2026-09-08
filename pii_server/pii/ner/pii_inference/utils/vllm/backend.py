@@ -4,6 +4,7 @@ import os
 
 from transformers import AutoConfig, AutoTokenizer
 from vllm import LLM
+from vllm.platforms import current_platform
 
 from ..pipeline import BasePiiNERPipeline
 
@@ -11,21 +12,29 @@ from ..pipeline import BasePiiNERPipeline
 class VllmPiiNERPipeline(BasePiiNERPipeline):
     """Run StarPII through vLLM's token-classification pooler."""
 
-    def __init__(self, model_name_or_path: str, device: int = -1) -> None:
+    def __init__(
+        self, model_name_or_path: str, device: int = -1, dtype: str = "auto"
+    ) -> None:
         """Initialize the vLLM inference pipeline.
 
         Args:
             model_name_or_path (str): Model identifier.
             device (int): CUDA device number; a negative value uses vLLM's
                 automatically selected platform.
+            dtype (str): Model precision; auto selects BF16 on GPU and FP32 on CPU.
         """
         if device >= 0:
             # vLLM selects a concrete accelerator through its visibility setting.
             os.environ["CUDA_VISIBLE_DEVICES"] = str(device)
 
         config = AutoConfig.from_pretrained(model_name_or_path)
+        # vLLM's own auto setting can select FP16 for this FP32 checkpoint.
+        if dtype == "auto":
+            dtype = "float32" if current_platform.is_cpu() else "bfloat16"
+        self.dtype = dtype
         self.model = LLM(
             model=model_name_or_path,
+            dtype=self.dtype,
             runner="pooling",
             pooler_config={"task": "token_classify", "use_activation": True},
         )
@@ -58,5 +67,6 @@ class VllmPiiNERPipeline(BasePiiNERPipeline):
             use_tqdm=False,
         )
         # Each model window has one special token at each boundary.
+        # NumPy cannot consume bfloat16 buffers directly.
         logits = [output.outputs.data[1:-1].float().numpy() for output in outputs]
         return {"logits": logits, **model_inputs}

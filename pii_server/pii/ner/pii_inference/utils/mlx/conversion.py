@@ -36,16 +36,22 @@ def _convert_weight_name(name: str) -> str:
 def convert(
     model_name_or_path: str,
     output_path: Path,
+    dtype: str,
 ) -> None:
     """Convert a StarPII checkpoint to MLX safetensors.
 
     Args:
         model_name_or_path (str): Hugging Face model identifier or local directory.
         output_path (Path): Destination for the converted checkpoint.
+        dtype (str): Precision of the saved weights.
     """
     model = AutoModelForTokenClassification.from_pretrained(model_name_or_path)
+    mlx_dtype = {
+        "bfloat16": mx.bfloat16,
+        "float32": mx.float32,
+    }[dtype]
     weights = {
-        _convert_weight_name(name): mx.array(value.numpy())
+        _convert_weight_name(name): mx.array(value.numpy()).astype(mlx_dtype)
         for name, value in model.state_dict().items()
     }
     mx.save_safetensors(output_path, weights)
@@ -53,30 +59,39 @@ def convert(
 
 def prepare_mlx_checkpoint(
     model_name_or_path: str,
+    dtype: str = "auto",
 ) -> Path:
     """Create or reuse a locally converted MLX checkpoint.
 
     Args:
         model_name_or_path (str): Hugging Face model identifier or local directory.
+        dtype (str): Saved precision; auto selects BF16 on GPU and FP32 on CPU.
 
     Returns:
-        Path: Cached MLX safetensors checkpoint.
+        Path: Cached MLX safetensors checkpoint for the selected precision.
     """
+    if dtype == "auto":
+        dtype = "float32" if mx.default_device() == mx.cpu else "bfloat16"
     cache_root = (
         Path(os.environ["XDG_CACHE_HOME"])
         if "XDG_CACHE_HOME" in os.environ
         else Path.home() / ".cache"
     )
     checkpoint_path = (
-        cache_root / "mlx" / model_name_or_path.replace("/", "--") / "model.safetensors"
+        cache_root
+        / "mlx"
+        / model_name_or_path.replace("/", "--")
+        / dtype
+        / "model.safetensors"
     )
     if checkpoint_path.exists():
         return checkpoint_path
 
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     config = BertConfig.from_pretrained(model_name_or_path)
+    config.dtype = dtype
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     config.save_pretrained(checkpoint_path.parent)
     tokenizer.save_pretrained(checkpoint_path.parent)
-    convert(model_name_or_path, checkpoint_path)
+    convert(model_name_or_path, checkpoint_path, dtype)
     return checkpoint_path

@@ -13,13 +13,14 @@ from pii_server.utils import parse_device, runtime_dir
 class Detector:
     """Combine BigCode's pattern and credential pipeline with StarPII."""
 
-    def __init__(self, device: int | str = -1) -> None:
+    def __init__(self, device: int | str = -1, dtype: str = "auto") -> None:
         """Initialize both detection pipelines.
 
         Args:
             device (int | str): Accelerator selection.
+            dtype (str): Model precision; auto selects BF16 on GPU and FP32 on CPU.
         """
-        self.starpii = StarPIIDetector(device)
+        self.starpii = StarPIIDetector(device, dtype=dtype)
 
     def scan(
         self,
@@ -116,11 +117,12 @@ def receive(connection: socket.socket) -> dict[str, object]:
     return json.loads(data)
 
 
-def serve(device: int | str = -1) -> None:
+def serve(device: int | str = -1, dtype: str = "auto") -> None:
     """Load StarPII and serve detection requests until unloaded.
 
     Args:
         device (int | str): Accelerator selection.
+        dtype (str): Model precision; auto selects BF16 on GPU and FP32 on CPU.
     """
     directory = runtime_dir()
     # The socket and log directory concern text that may contain private data.
@@ -131,7 +133,7 @@ def serve(device: int | str = -1) -> None:
         socket_path.unlink()
 
     print("Loading PII detector")
-    detector = Detector(device)
+    detector = Detector(device, dtype=dtype)
     print("PII detector loaded")
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
@@ -176,4 +178,10 @@ def serve(device: int | str = -1) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--device", type=parse_device, default=-1)
-    serve(parser.parse_args().device)
+    parser.add_argument(
+        "--dtype",
+        choices=("auto", "bfloat16", "float32"),
+        default="auto",
+    )
+    args = parser.parse_args()
+    serve(args.device, args.dtype)
