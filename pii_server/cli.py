@@ -1,21 +1,41 @@
-import argparse
 import io
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Annotated, Literal
 
 import pyperclip
+import typer
 
 from pii_server.pii.pii_redaction import redact_pii_text
 from pii_server.utils import parse_device, request, runtime_dir, server_running
 
 
-def initialize(device: int | str = -1, dtype: str = "auto") -> int:
+def initialize(
+    device: Annotated[
+        str,
+        typer.Option(
+            "-d",
+            "--device",
+            parser=lambda value: str(parse_device(value)),
+            metavar="DEVICE",
+            help="Accelerator: -1 for automatic selection, a CUDA index, or mps.",
+        ),
+    ] = "-1",
+    dtype: Annotated[
+        Literal["auto", "bfloat16", "float32"],
+        typer.Option(
+            "-t",
+            "--dtype",
+            help="Model precision; auto selects BF16 on GPU and FP32 on CPU.",
+        ),
+    ] = "auto",
+) -> int:
     """Start the persistent server and load StarPII.
 
     Args:
-        device (int | str): Accelerator selection.
+        device (str): Accelerator selection.
         dtype (str): Model precision; auto selects BF16 on GPU and FP32 on CPU.
 
     Returns:
@@ -167,11 +187,27 @@ def scan(
 
 
 def detect(
-    filenames: list[str],
-    key_detector: str,
-    window_size: int,
-    window_overlap: int,
-    batch_size: int,
+    filenames: Annotated[
+        list[str],
+        typer.Argument(help="Repository-relative staged files to scan.", path_type=str),
+    ],
+    key_detector: Annotated[
+        Literal["detect-secrets", "regex"],
+        typer.Option("-k", "--key-detector", help="Credential detector."),
+    ] = "detect-secrets",
+    window_size: Annotated[
+        int, typer.Option("-w", "--window-size", help="Tokens in each StarPII window.")
+    ] = 512,
+    window_overlap: Annotated[
+        int,
+        typer.Option(
+            "-o", "--window-overlap", help="Tokens shared by adjacent windows."
+        ),
+    ] = 0,
+    batch_size: Annotated[
+        int,
+        typer.Option("-b", "--batch-size", help="StarPII windows evaluated together."),
+    ] = 1,
 ) -> int:
     """Scan staged files with the initialized server.
 
@@ -226,12 +262,29 @@ def detect(
 
 
 def mask(
-    filename: Path,
-    in_place: bool,
-    key_detector: str,
-    window_size: int,
-    window_overlap: int,
-    batch_size: int,
+    filename: Annotated[
+        Path, typer.Option("-f", "--file", help="Text file to mask in full.")
+    ],
+    in_place: Annotated[
+        bool, typer.Option("-i", "--in-place", help="Overwrite the input file.")
+    ] = False,
+    key_detector: Annotated[
+        Literal["detect-secrets", "regex"],
+        typer.Option("-k", "--key-detector", help="Credential detector."),
+    ] = "detect-secrets",
+    window_size: Annotated[
+        int, typer.Option("-w", "--window-size", help="Tokens in each StarPII window.")
+    ] = 512,
+    window_overlap: Annotated[
+        int,
+        typer.Option(
+            "-o", "--window-overlap", help="Tokens shared by adjacent windows."
+        ),
+    ] = 0,
+    batch_size: Annotated[
+        int,
+        typer.Option("-b", "--batch-size", help="StarPII windows evaluated together."),
+    ] = 1,
 ) -> int:
     """Replace detected PII in a text file with type-specific mask tokens.
 
@@ -282,138 +335,18 @@ def unload() -> int:
     return 0
 
 
-def main() -> int:
-    """Run the requested PII server command.
-
-    Returns:
-        int: Process exit status.
-    """
-    parser = argparse.ArgumentParser(
-        description="Detect PII in staged Git content or mask PII in text files."
+def main() -> None:
+    """Run the requested PII server command."""
+    app = typer.Typer(
+        help="Detect PII in staged Git content or mask PII in text files.",
+        context_settings={"help_option_names": ["-h", "--help"]},
+        # Pre-commit needs the exit status returned by detect.
+        result_callback=sys.exit,
     )
-    subparsers = parser.add_subparsers(
-        dest="command",
-        required=True,
-        title="commands",
+    app.command("init", help="Start the server and load StarPII.")(initialize)
+    app.command(help="Scan staged file contents.")(detect)
+    app.command(help="Mask PII in a text file and copy the result to the clipboard.")(
+        mask
     )
-
-    init_parser = subparsers.add_parser(
-        "init",
-        help="start the server and load StarPII",
-        description="Start the persistent server and load StarPII.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    init_parser.add_argument(
-        "--dtype",
-        choices=("auto", "bfloat16", "float32"),
-        default="auto",
-        help="model precision; auto selects BF16 on GPU and FP32 on CPU",
-    )
-    init_parser.add_argument(
-        "-d",
-        "--device",
-        type=parse_device,
-        default=-1,
-        help=(
-            "macOS always uses the Apple GPU through MLX; elsewhere, "
-            "-1 uses vLLM platform detection and a nonnegative integer selects CUDA"
-        ),
-    )
-    scan_parser = argparse.ArgumentParser(add_help=False)
-    scan_parser.add_argument(
-        "-k",
-        "--key-detector",
-        choices=("detect-secrets", "regex"),
-        default="detect-secrets",
-        help=(
-            "credential detector: detect-secrets uses format-specific plugins and "
-            "filters; regex uses BigCode's broad key pattern and gibberish filter"
-        ),
-    )
-    scan_parser.add_argument(
-        "-w",
-        "--window-size",
-        type=int,
-        default=512,
-        help="tokens in each StarPII input window",
-    )
-    scan_parser.add_argument(
-        "-o",
-        "--window-overlap",
-        type=int,
-        default=0,
-        help="tokens shared by adjacent StarPII input windows",
-    )
-    scan_parser.add_argument(
-        "-b",
-        "--batch-size",
-        type=int,
-        default=1,
-        help="StarPII windows evaluated together",
-    )
-    detect_parser = subparsers.add_parser(
-        "detect",
-        parents=[scan_parser],
-        help="scan staged file contents",
-        description="Scan the staged contents of files passed by pre-commit.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    detect_parser.add_argument(
-        "filenames",
-        nargs="+",
-        help="repository-relative staged files to scan",
-    )
-
-    mask_parser = subparsers.add_parser(
-        "mask",
-        parents=[scan_parser],
-        help="mask PII in a text file",
-        description=(
-            "Replace detected PII with <TYPE_MASK> tokens in a UTF-8 text file. "
-            "By default, print the result and copy it to the clipboard."
-        ),
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    mask_parser.add_argument(
-        "-f",
-        "--file",
-        dest="filename",
-        type=Path,
-        required=True,
-        default=argparse.SUPPRESS,
-        help="text file to mask in full",
-    )
-    mask_parser.add_argument(
-        "-i",
-        "--in-place",
-        action="store_true",
-        help="overwrite the input file with masked text",
-    )
-
-    subparsers.add_parser(
-        "unload",
-        help="stop the server and release model memory",
-        description="Stop the persistent server and release model memory.",
-    )
-
-    args = parser.parse_args()
-    if args.command == "init":
-        return initialize(args.device, args.dtype)
-    if args.command == "detect":
-        return detect(
-            args.filenames,
-            args.key_detector,
-            args.window_size,
-            args.window_overlap,
-            args.batch_size,
-        )
-    if args.command == "mask":
-        return mask(
-            args.filename,
-            args.in_place,
-            args.key_detector,
-            args.window_size,
-            args.window_overlap,
-            args.batch_size,
-        )
-    return unload()
+    app.command(help="Stop the server and release model memory.")(unload)
+    app()
