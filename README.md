@@ -14,6 +14,21 @@ uv tool install -e ".[mlx]"
 uv tool install -e ".[vllm]"
 ```
 
+To enable Zsh completion, generate the completion file from Zsh:
+
+```console
+mkdir -p ~/.zfunc
+pii_server --show-completion > ~/.zfunc/_pii_server
+```
+
+Add `~/.zfunc` to `fpath`
+
+```zsh
+fpath+=(~/.zfunc)
+autoload -Uz compinit
+compinit
+```
+
 Start the detector before using `detect` or `mask`. The first run may take
 several minutes:
 
