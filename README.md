@@ -51,6 +51,14 @@ when initializing the server:
 pii_server init --device 0
 ```
 
+To run on the CPU on Ubuntu, use:
+
+```console
+pii_server init --device cpu
+```
+
+On macOS, `--device cpu` emits a warning and uses `mps` (the Apple GPU via MLX).
+
 ## Git hook
 
 Add this to `.pre-commit-config.yaml`:
