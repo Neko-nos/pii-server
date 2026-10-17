@@ -1,7 +1,9 @@
 import json
 import os
 import socket
+import sys
 import tempfile
+import warnings
 from pathlib import Path
 
 
@@ -9,12 +11,19 @@ def parse_device(value: str) -> int | str:
     """Parse a device argument accepted by the server.
 
     Args:
-        value (str): Automatic selection (-1), CUDA device number, or ``mps``.
+        value (str): Automatic selection (-1), CUDA device number, ``cpu``, or ``mps``.
 
     Returns:
-        int | str: Integer device number or ``mps`` backend name.
+        int | str: Integer device number or backend name; macOS maps CPU to MPS.
     """
-    if value == "mps":
+    if value == "cpu" and sys.platform == "darwin":
+        warnings.warn(
+            "CPU inference is not supported on macOS; using the mps backend "
+            "(Apple GPU via MLX) instead.",
+            stacklevel=2,
+        )
+        return "mps"
+    if value in {"cpu", "mps"}:
         return value
     return int(value)
 

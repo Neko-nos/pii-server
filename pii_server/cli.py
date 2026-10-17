@@ -20,7 +20,7 @@ def initialize(
             "--device",
             parser=lambda value: str(parse_device(value)),
             metavar="DEVICE",
-            help="Accelerator: -1 for automatic selection, a CUDA index, or mps.",
+            help="Device: -1 for automatic selection, a CUDA index, cpu, or mps.",
         ),
     ] = "-1",
     dtype: Annotated[
@@ -35,7 +35,7 @@ def initialize(
     """Start the persistent server and load StarPII.
 
     Args:
-        device (str): Accelerator selection.
+        device (str): CPU or accelerator selection.
         dtype (str): Model precision; auto selects BF16 on GPU and FP32 on CPU.
 
     Returns:

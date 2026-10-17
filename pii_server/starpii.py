@@ -7,6 +7,7 @@ from datasets import Dataset
 from gibberish_detector import detector
 
 from pii_server.pii.ner.pii_redaction.utils import keep_entity
+from pii_server.utils import parse_device
 
 if sys.platform == "darwin":
     from pii_server.pii.ner.pii_inference.utils.mlx.backend import MlxPiiNERPipeline
@@ -14,6 +15,9 @@ if sys.platform == "darwin":
         prepare_mlx_checkpoint,
     )
 else:
+    from pii_server.pii.ner.pii_inference.utils.transformers import (
+        TransformersPiiNERPipeline,
+    )
     from pii_server.pii.ner.pii_inference.utils.vllm.backend import (
         VllmPiiNERPipeline,
     )
@@ -26,14 +30,17 @@ class StarPIIDetector:
         """Load StarPII on the configured device.
 
         Args:
-            device (int | str): CUDA device number or automatic selection with -1.
+            device (int | str): CPU, CUDA device number, or automatic selection with -1.
                 macOS always uses the Apple GPU through MLX.
             dtype (str): Model precision; auto selects BF16 on GPU and FP32 on CPU.
         """
 
+        device = parse_device(str(device))
         if sys.platform == "darwin":
             checkpoint_path = prepare_mlx_checkpoint("bigcode/starpii", dtype=dtype)
             self.pipeline = MlxPiiNERPipeline(checkpoint_path)
+        elif device == "cpu":
+            self.pipeline = TransformersPiiNERPipeline("bigcode/starpii", dtype=dtype)
         else:
             self.pipeline = VllmPiiNERPipeline(
                 "bigcode/starpii", device=device, dtype=dtype

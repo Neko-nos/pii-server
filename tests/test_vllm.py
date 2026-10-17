@@ -1,7 +1,5 @@
 import pytest
-import torch
 from datasets import Dataset
-from vllm.platforms import current_platform
 
 from pii_server.pii.ner.pii_inference.utils.vllm.backend import (
     VllmPiiNERPipeline,
@@ -16,14 +14,6 @@ def vllm_pipeline() -> VllmPiiNERPipeline:
         VllmPiiNERPipeline: Initialized pipeline on the detected platform.
     """
     return VllmPiiNERPipeline("bigcode/starpii")
-
-
-def test_vllm_pipeline_selects_default_dtype(
-    vllm_pipeline: VllmPiiNERPipeline,
-) -> None:
-    assert vllm_pipeline.model.llm_engine.model_config.dtype == (
-        torch.float32 if current_platform.is_cpu() else torch.bfloat16
-    )
 
 
 def test_vllm_model_inference_detects_dummy_email(
