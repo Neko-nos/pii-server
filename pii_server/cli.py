@@ -1,4 +1,3 @@
-import io
 import subprocess
 import sys
 import time
@@ -94,9 +93,10 @@ def staged_additions(filename: str) -> list[str]:
         list[str]: Contents of each contiguous group of added lines.
 
     Raises:
-        RuntimeError: Git cannot read the staged diff.
+        subprocess.CalledProcessError: Git cannot read the staged diff.
+        typer.BadParameter: The file has no staged changes to scan.
     """
-    result = subprocess.run(
+    diff = subprocess.check_output(
         [
             "git",
             "diff",
@@ -107,19 +107,19 @@ def staged_additions(filename: str) -> list[str]:
             "--",
             filename,
         ],
-        capture_output=True,
-        check=False,
         encoding="utf-8",
         errors="replace",
-        text=True,
     )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip())
+    if not diff:
+        raise typer.BadParameter(
+            f"{filename}: no staged changes to scan. Stage changes with 'git add' "
+            "or use '--no-git' to scan the full file."
+        )
 
     additions = []
     current_range = []
     in_hunk = False
-    for line in result.stdout.splitlines():
+    for line in diff.splitlines():
         if line.startswith("@@"):
             if current_range:
                 additions.append("\n".join(current_range))
@@ -132,26 +132,7 @@ def staged_additions(filename: str) -> list[str]:
             current_range = []
     if current_range:
         additions.append("\n".join(current_range))
-    # Empty added ranges cannot contain private text and produce no model tokens.
-    return [addition for addition in additions if addition.strip()]
-
-
-def terminal_answer(
-    terminal_input: io.TextIOBase, terminal_output: io.TextIOBase
-) -> str:
-    """Ask whether detected text contains real private data.
-
-    Args:
-        terminal_input (io.TextIOBase): Controlling terminal input.
-        terminal_output (io.TextIOBase): Controlling terminal output.
-
-    Returns:
-        str: Normalized user response.
-    """
-    prompt = "Does the suspicious text contain actual PII or credentials? [Y/n]: "
-    terminal_output.write(prompt)
-    terminal_output.flush()
-    return terminal_input.readline().strip().lower()
+    return additions
 
 
 def scan(
@@ -189,8 +170,14 @@ def scan(
 def detect(
     filenames: Annotated[
         list[str],
-        typer.Argument(help="Repository-relative staged files to scan.", path_type=str),
+        typer.Argument(help="Files to scan; staged additions by default."),
     ],
+    no_git: Annotated[
+        bool,
+        typer.Option(
+            "-n", "--no-git", help="Scan full UTF-8 files without consulting Git."
+        ),
+    ] = False,
     key_detector: Annotated[
         Literal["detect-secrets", "regex"],
         typer.Option("-k", "--key-detector", help="Credential detector."),
@@ -209,10 +196,11 @@ def detect(
         typer.Option("-b", "--batch-size", help="StarPII windows evaluated together."),
     ] = 1,
 ) -> int:
-    """Scan staged files with the initialized server.
+    """Scan staged additions or full files with the initialized server.
 
     Args:
-        filenames (list[str]): Repository-relative staged filenames.
+        filenames (list[str]): Paths to the files to scan.
+        no_git (bool): Read full files instead of added staged lines.
         key_detector (str): ``detect-secrets`` or ``regex`` credential detector.
         window_size (int): Tokens in each StarPII input window.
         window_overlap (int): Tokens shared by adjacent StarPII input windows.
@@ -221,16 +209,22 @@ def detect(
     Returns:
         int: One when real private data is reported, otherwise zero.
     """
+    # Empty inputs produce no model windows and would misalign batched findings.
     files = [
-        {"filename": filename, "text": addition}
+        {"filename": filename, "text": content}
         for filename in filenames
-        for addition in staged_additions(filename)
+        for content in (
+            [Path(filename).read_text(encoding="utf-8")]
+            if no_git
+            else staged_additions(filename)
+        )
+        if content.strip()
     ]
-    # Deletion-only changes contain no added text to scan.
+    # Deletion-only changes and empty files contain no text to scan.
     if not files:
         return 0
 
-    # Send all added contents together so the pipeline processes one collection.
+    # Send all contents together so the pipeline processes one collection.
     findings = scan(files, key_detector, window_size, window_overlap, batch_size)
     if not findings:
         return 0
@@ -241,8 +235,7 @@ def detect(
         Path("/dev/tty").open("w", encoding="utf-8") as terminal_output,
     ):
         # Pre-commit leaves its progress message open while the hook is running.
-        print(file=terminal_output)
-        print("Suspicious staged text found", file=terminal_output)
+        print("\nSuspicious text found", file=terminal_output)
 
         for finding in findings:
             text = finding["text"].replace("\n", "\\n")
@@ -250,14 +243,15 @@ def detect(
                 f"{finding['filename']}: {finding['type']}: {text}",
                 file=terminal_output,
             )
-            if terminal_answer(terminal_input, terminal_output) not in {"n", "no"}:
-                print("Commit blocked.", file=terminal_output)
+            terminal_output.write(
+                "Does the suspicious text contain actual PII or credentials? [Y/n]: "
+            )
+            terminal_output.flush()
+            if terminal_input.readline().strip().lower() not in {"n", "no"}:
+                print("PII or credentials confirmed.", file=terminal_output)
                 return 1
 
-        print(
-            "All findings confirmed false positives; continuing commit.",
-            file=terminal_output,
-        )
+        print("All findings confirmed false positives.", file=terminal_output)
         return 0
 
 
@@ -344,7 +338,7 @@ def main() -> None:
         result_callback=sys.exit,
     )
     app.command("init", help="Start the server and load StarPII.")(initialize)
-    app.command(help="Scan staged file contents.")(detect)
+    app.command(help="Scan staged additions or full files with --no-git.")(detect)
     app.command(help="Mask PII in a text file and copy the result to the clipboard.")(
         mask
     )
