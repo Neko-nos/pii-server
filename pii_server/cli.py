@@ -94,6 +94,7 @@ def staged_additions(filename: str) -> list[str]:
 
     Raises:
         subprocess.CalledProcessError: Git cannot read the staged diff.
+        typer.BadParameter: The file has no staged changes to scan.
     """
     diff = subprocess.check_output(
         [
@@ -109,6 +110,11 @@ def staged_additions(filename: str) -> list[str]:
         encoding="utf-8",
         errors="replace",
     )
+    if not diff:
+        raise typer.BadParameter(
+            f"{filename}: no staged changes to scan. Stage changes with 'git add' "
+            "or use '--no-git' to scan the full file."
+        )
 
     additions = []
     current_range = []
