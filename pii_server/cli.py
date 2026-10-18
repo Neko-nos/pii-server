@@ -1,4 +1,3 @@
-import io
 import subprocess
 import sys
 import time
@@ -94,9 +93,9 @@ def staged_additions(filename: str) -> list[str]:
         list[str]: Contents of each contiguous group of added lines.
 
     Raises:
-        RuntimeError: Git cannot read the staged diff.
+        subprocess.CalledProcessError: Git cannot read the staged diff.
     """
-    result = subprocess.run(
+    diff = subprocess.check_output(
         [
             "git",
             "diff",
@@ -107,19 +106,14 @@ def staged_additions(filename: str) -> list[str]:
             "--",
             filename,
         ],
-        capture_output=True,
-        check=False,
         encoding="utf-8",
         errors="replace",
-        text=True,
     )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip())
 
     additions = []
     current_range = []
     in_hunk = False
-    for line in result.stdout.splitlines():
+    for line in diff.splitlines():
         if line.startswith("@@"):
             if current_range:
                 additions.append("\n".join(current_range))
@@ -134,24 +128,6 @@ def staged_additions(filename: str) -> list[str]:
         additions.append("\n".join(current_range))
     # Empty added ranges cannot contain private text and produce no model tokens.
     return [addition for addition in additions if addition.strip()]
-
-
-def terminal_answer(
-    terminal_input: io.TextIOBase, terminal_output: io.TextIOBase
-) -> str:
-    """Ask whether detected text contains real private data.
-
-    Args:
-        terminal_input (io.TextIOBase): Controlling terminal input.
-        terminal_output (io.TextIOBase): Controlling terminal output.
-
-    Returns:
-        str: Normalized user response.
-    """
-    prompt = "Does the suspicious text contain actual PII or credentials? [Y/n]: "
-    terminal_output.write(prompt)
-    terminal_output.flush()
-    return terminal_input.readline().strip().lower()
 
 
 def scan(
@@ -189,7 +165,7 @@ def scan(
 def detect(
     filenames: Annotated[
         list[str],
-        typer.Argument(help="Repository-relative staged files to scan.", path_type=str),
+        typer.Argument(help="Repository-relative staged files to scan."),
     ],
     key_detector: Annotated[
         Literal["detect-secrets", "regex"],
@@ -241,8 +217,7 @@ def detect(
         Path("/dev/tty").open("w", encoding="utf-8") as terminal_output,
     ):
         # Pre-commit leaves its progress message open while the hook is running.
-        print(file=terminal_output)
-        print("Suspicious staged text found", file=terminal_output)
+        print("\nSuspicious text found", file=terminal_output)
 
         for finding in findings:
             text = finding["text"].replace("\n", "\\n")
@@ -250,14 +225,15 @@ def detect(
                 f"{finding['filename']}: {finding['type']}: {text}",
                 file=terminal_output,
             )
-            if terminal_answer(terminal_input, terminal_output) not in {"n", "no"}:
-                print("Commit blocked.", file=terminal_output)
+            terminal_output.write(
+                "Does the suspicious text contain actual PII or credentials? [Y/n]: "
+            )
+            terminal_output.flush()
+            if terminal_input.readline().strip().lower() not in {"n", "no"}:
+                print("PII or credentials confirmed.", file=terminal_output)
                 return 1
 
-        print(
-            "All findings confirmed false positives; continuing commit.",
-            file=terminal_output,
-        )
+        print("All findings confirmed false positives.", file=terminal_output)
         return 0
 
 
