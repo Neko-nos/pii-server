@@ -126,8 +126,7 @@ def staged_additions(filename: str) -> list[str]:
             current_range = []
     if current_range:
         additions.append("\n".join(current_range))
-    # Empty added ranges cannot contain private text and produce no model tokens.
-    return [addition for addition in additions if addition.strip()]
+    return additions
 
 
 def scan(
@@ -165,8 +164,14 @@ def scan(
 def detect(
     filenames: Annotated[
         list[str],
-        typer.Argument(help="Repository-relative staged files to scan."),
+        typer.Argument(help="Files to scan; staged additions by default."),
     ],
+    no_git: Annotated[
+        bool,
+        typer.Option(
+            "-n", "--no-git", help="Scan full UTF-8 files without consulting Git."
+        ),
+    ] = False,
     key_detector: Annotated[
         Literal["detect-secrets", "regex"],
         typer.Option("-k", "--key-detector", help="Credential detector."),
@@ -185,10 +190,11 @@ def detect(
         typer.Option("-b", "--batch-size", help="StarPII windows evaluated together."),
     ] = 1,
 ) -> int:
-    """Scan staged files with the initialized server.
+    """Scan staged additions or full files with the initialized server.
 
     Args:
-        filenames (list[str]): Repository-relative staged filenames.
+        filenames (list[str]): Paths to the files to scan.
+        no_git (bool): Read full files instead of added staged lines.
         key_detector (str): ``detect-secrets`` or ``regex`` credential detector.
         window_size (int): Tokens in each StarPII input window.
         window_overlap (int): Tokens shared by adjacent StarPII input windows.
@@ -197,16 +203,22 @@ def detect(
     Returns:
         int: One when real private data is reported, otherwise zero.
     """
+    # Empty inputs produce no model windows and would misalign batched findings.
     files = [
-        {"filename": filename, "text": addition}
+        {"filename": filename, "text": content}
         for filename in filenames
-        for addition in staged_additions(filename)
+        for content in (
+            [Path(filename).read_text(encoding="utf-8")]
+            if no_git
+            else staged_additions(filename)
+        )
+        if content.strip()
     ]
-    # Deletion-only changes contain no added text to scan.
+    # Deletion-only changes and empty files contain no text to scan.
     if not files:
         return 0
 
-    # Send all added contents together so the pipeline processes one collection.
+    # Send all contents together so the pipeline processes one collection.
     findings = scan(files, key_detector, window_size, window_overlap, batch_size)
     if not findings:
         return 0
@@ -320,7 +332,7 @@ def main() -> None:
         result_callback=sys.exit,
     )
     app.command("init", help="Start the server and load StarPII.")(initialize)
-    app.command(help="Scan staged file contents.")(detect)
+    app.command(help="Scan staged additions or full files with --no-git.")(detect)
     app.command(help="Mask PII in a text file and copy the result to the clipboard.")(
         mask
     )

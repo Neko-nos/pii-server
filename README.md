@@ -79,6 +79,15 @@ repos:
 The hook scans added staged lines and asks about each finding. Answer `n` for
 a false positive; otherwise, the commit is blocked.
 
+## Scanning files without Git
+
+Use `--no-git` (`-n`) to scan the full contents, including those of
+untracked files and files outside a Git repository:
+
+```console
+pii_server detect --no-git input.txt another.txt
+```
+
 ## Masking a text file
 
 Pass a UTF-8 text file with `--file` (`-f`):
